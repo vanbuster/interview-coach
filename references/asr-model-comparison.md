@@ -1,135 +1,87 @@
-# ASR（语音转文字）模型选型指南
+# ASR 引擎选型指南（面试复盘场景）
 
-> 适用于：macOS Apple Silicon 本地推理，中文场景优先
-> 更新日期：2026-05-31
+> 适用场景：面试录音 → 结构化复盘文档（含音频切分）
+> 硬件：macOS Apple Silicon (M-series)
+> 更新日期：2026-06-06
+> 基于：33 分钟中文面试音频实测数据
 
-## 1. 当前使用方案
+## 1. 当前最佳实践
 
 | 项目 | 值 |
 |---|---|
-| 模型 | `mlx-community/whisper-medium` |
+| 引擎 | **MLX Whisper medium**（4-bit 量化） |
 | 框架 | mlx-whisper |
-| 大小 | ~1.5GB |
-| 中文效果 | 中等（口语转写有较多错字，如「PRD」→「pid」） |
-| 38min 音频耗时 | 约 2-3 分钟（含下载） |
+| 模型大小 | ~489MB（缓存于 `~/.cache/huggingface/hub/`） |
+| 转写速度 | **1.5 min / 30 min 音频**（21.8x 实时） |
+| 时间戳精度 | **词级 ~20ms**（每个词有独立 start/end） |
+| 中文质量 | 优（9370 字转写，7263 词带时间戳） |
 
-**已知问题**：
-- 口语化对话中专业术语识别差（「PRD」「Agent」「Hook」等中英混合场景）
-- 标点符号不准确
-- 说话人区分不支持
-- large-v3-turbo 下载在 SOCKS 代理环境下容易中断
+**核心能力**：`word_timestamps=True` 为每个词提供精确起止时间，使 LLM 能在词级索引中搜索问答转折关键句，边界精度 <0.1s。
 
-## 2. 模型对比
+## 2. 为什么不用其他方案
 
-| 模型 | 中文准确度 | 方言 | 说话人分离 | Apple Silicon | 大小 | 速度 | 推荐场景 |
-|---|---|---|---|---|---|---|---|
-| **Fun-ASR-Nano-2512 (MLX)** | ⭐⭐⭐⭐⭐ | 7种方言 | ❌ | ✅ MLX 原生 | ~400MB | 极快 | **中文首选** |
-| SenseVoice | ⭐⭐⭐⭐⭐ | 粤语 | ❌ | ⚠️ 需 onnxruntime | ~900MB | 52x realtime | 高精度中文 |
-| Voxtral Transcribe 2 | ⭐⭐⭐⭐⭐ | 多语言 | ❌ | ❌ 需 GPU/CPU | 较大 | 实时流式 | 多语言通用 |
-| Whisper Large-v3 (MLX) | ⭐⭐⭐⭐ | ❌ | ❌ | ✅ MLX 原生 | ~3GB | 快 | 多语言通用 |
-| Whisper Medium (MLX) | ⭐⭐⭐ | ❌ | ❌ | ✅ MLX 原生 | ~1.5GB | 快 | 轻量备选 |
-| WhisperX | ⭐⭐⭐⭐ | ❌ | ❌ | ⚠️ 需 faster-whisper | ~1.5GB | 较快 | 需词级时间戳 |
-| FunASR Paraformer | ⭐⭐⭐⭐⭐ | 多种 | ✅ | ⚠️ 需 PyTorch | ~1GB | 170x realtime | 工业级中文 |
+### SenseVoice（不推荐用于面试复盘）
 
-## 3. 推荐方案
+- 无内部时间戳，只返回整段文本
+- 长音频需要手动切片 + 重叠拼接，边界只能靠字符比例估算（误差 ±100s）
+- 适合：短音频快速转写，不需要精确边界定位的场景
 
-### 🏆 首选：SenseVoiceSmall（MLX 版）
+### FunASR Paraformer + CAM++（不推荐）
 
-- **HuggingFace**: `mlx-community/SenseVoiceSmall`
-- **来源**: 阿里巴巴通义实验室（同 Fun-ASR 系列）
-- **优势**:
-  - mlx-audio 原生支持，无需额外依赖
-  - 中文准确度极高（30s 音频实测，口语识别远超 whisper-medium）
-  - 支持语言检测（zh/en/ja/ko/yue）、情感识别、音频事件检测
-  - Apple Silicon 原生推理，30s 音频 1.67s 完成（~18x 实时速度）
-  - 模型 ~900MB
-- **安装**:
-  ```bash
-  pip install mlx-audio
-  ```
-- **使用**:
-  ```python
-  from mlx_audio.stt.generate import generate_transcription
-  result = generate_transcription(model="mlx-community/SenseVoiceSmall", audio="audio.mp3")
-  ```
+实测问题清单：
 
-> **注意**：Fun-ASR-Nano-2512（`mlx-community/Fun-ASR-Nano-2512-fp16`）虽然在 HF 上有 MLX 版，
-> 但其 `model_type: funasr` 截至 mlx-audio 0.4.3 尚未被支持，加载时会报 `ValueError: Model type funasr not supported`。
-> 同属通义实验室的 SenseVoice 是当前 mlx-audio 中中文场景的最佳选择。
+| 问题 | 详情 | 影响 |
+|------|------|------|
+| **前 48 秒音频丢失** | FSMN-VAD 对开场轻声寒暄检测失败 | 面试开场全部丢失 |
+| 4x 慢于 Whisper | 6.1 min vs 1.5 min（PyTorch MPS 非原生） | 总流程超 10 分钟 |
+| 内存 5-10x 高 | PyTorch 多模型加载（VAD+ASR+标点+分离） | 影响并发任务 |
+| 无词级时间戳 | 只有句子级 start/end（~100ms） | 无法精确定位转折点 |
 
-### 🥈 备选：whisper-large-v3-turbo（MLX 版）
+前 48 秒丢失是致命问题（VAD 阈值调优不具备生产稳定性），且无词级时间戳无法满足精确边界切分需求。
 
-- **HuggingFace**: `mlx-community/whisper-large-v3-turbo`
-- **优势**: 多语言通用，99+ 语言支持
-- **劣势**: 中文不如 Fun-ASR，模型 ~800MB
-- **适用**: 英文为主或中英混合的通用场景
+### Whisper large-v3-turbo（不推荐）
 
-### 🥉 重度场景：FunASR Paraformer（完整版）
+- 中文开头易出现幻觉循环（重复乱码）
+- 速度提升有限（76.9s vs 90.4s），质量下降明显
 
-- **GitHub**: `modelscope/FunASR`
-- **优势**: 工业级精度，支持说话人分离、情感检测、流式识别
-- **劣势**: 需要 PyTorch + ModelScope，环境较重
-- **适用**: 需要说话人分离的会议记录、多人对话场景
+## 3. 实测数据对比（33 分钟中文面试）
 
-## 4. 优化后的工作流
+| 引擎 | 转写耗时 | 倍速 | 词级时间戳 | 标点 | 说话人分离 | 首句完整性 |
+|------|---------|------|-----------|------|-----------|-----------|
+| **MLX Whisper medium** | **90.4s** | **21.8x** | **✅ ~20ms** | ❌ | ❌（LLM 推断） | **✅ 完整** |
+| MLX Whisper large-v3-turbo | 76.9s | 25.6x | ✅ ~20ms | ❌ | ❌ | ❌ 开头幻觉 |
+| FunASR Paraformer + CAM++ | 367.5s | 5.4x | ❌ 句级 ~100ms | ✅ | ✅ | ❌ 前 48s 丢失 |
+| SenseVoice | ~120s（估） | ~16x | ❌ 无 | ❌ | ❌ | ✅ |
 
-### 4.1 标准转写流程
+## 4. 说话人分离：为什么不需要
+
+面试复盘的核心诉求是**音频拆分精准**，不是自动识别说话人。
+
+- Whisper 转写后，LLM 根据对话内容即可判断面试官/候选人角色
+- 面试对话中角色切换模式清晰（提问→回答→追问→回答）
+- 实测验证：LLM 推断说话人角色准确率足够满足复盘文档需求
+
+如未来需要升级说话人分离能力，可选方案：Whisper + pyannote 3.1（DER ~10%，需 HF token）。
+
+## 5. 安装与使用
 
 ```bash
-# Step 1: 转码（如果需要）
-ffmpeg -i "input.qta" -map 0:0 -acodec libmp3lame -ab 128k "output.mp3"
+# 安装
+pip install mlx-whisper
 
-# Step 2: 转写（首选 SenseVoice）
-python3 -c "
-from mlx_audio.stt.generate import generate_transcription
-result = generate_transcription(model='mlx-community/SenseVoiceSmall', audio='output.mp3')
-print(result.text)
-"
+# 转写（首次运行自动下载模型 ~489MB）
+python3 scripts/transcribe.py interview.mp3
 
-# Step 3: 切段（按时间戳）
-ffmpeg -i output.mp3 -ss START -to END -c copy clip.mp3
+# 输出文件：
+#   transcript_full.json      — 完整 JSON（含 word-level timestamps）
+#   transcript_timestamped.txt — [MM:SS - MM:SS] 格式文本
+#   transcript_timeline.txt   — 时间轴摘要
+#   transcript_words.json     — 词级时间戳索引（用于精确边界定位）
 ```
 
-### 4.2 大文件处理建议
+## 6. 参考链接
 
-对于 >60 分钟的音频：
-1. **预处理切片**: 先用 ffmpeg 按 10-15 分钟切段，并行转写
-2. **结果合并**: 转写后按时间戳拼接
-3. **上下文保留**: 保存完整转写 JSON（含时间戳），摘要只用于显示
-
-### 4.3 避免 Context 压缩丢失
-
-- 完整转写文本保存为本地文件（`transcript_full.json`）
-- Agent 只读取当前需要的段落，不一次性加载全文
-- 关键信息（问答边界、时间戳）用结构化格式存储
-
-## 5. 模型缓存位置
-
-| 框架 | 缓存路径 |
-|---|---|
-| mlx-whisper / mlx-audio | `~/.cache/huggingface/hub/` |
-| FunASR (ModelScope) | `~/.cache/modelscope/hub/` |
-
-## 6. 代理问题解决方案
-
-下载模型时如果 SOCKS 代理卡住：
-
-```bash
-# 方案 A: 临时禁用代理
-NO_PROXY="huggingface.co" http_proxy="" https_proxy="" python3 transcribe.py
-
-# 方案 B: 安装 socksio（让 httpx 支持 SOCKS）
-pip install "httpx[socks]" socksio
-
-# 方案 C: 提前手动下载
-huggingface-cli download mlx-community/Fun-ASR-Nano-2512-fp16
-```
-
-## 7. 来源与参考
-
-- [FunASR GitHub](https://github.com/modelscope/FunASR) — 阿里巴巴通义实验室
-- [mlx-community/Fun-ASR-Nano-2512-fp16](https://huggingface.co/mlx-community/Fun-ASR-Nano-2512-fp16) — MLX 优化版
-- [mlx-audio GitHub](https://github.com/Blaizzy/mlx-audio) — Apple Silicon 音频库
-- [SenseVoice 对比](https://whispernotes.app/blog/sensevoice-fastest-cjk-transcription) — 中文 ASR 基准
-- [Voxtral vs Whisper 2026](https://weesperneonflow.ai/en/blog/2026-03-31-voxtral-whisper-open-source-speech-models-comparison-2026/) — 2026 年 ASR 对比
-- [WhisperX](https://github.com/m-bain/whisperX) — 词级时间戳增强
+- [mlx-whisper](https://github.com/ml-explore/mlx-whisper) — MLX Whisper 框架
+- [mlx-community/whisper-medium](https://huggingface.co/mlx-community/whisper-medium) — 模型仓库
+- [FunASR](https://github.com/modelscope/FunASR) — 阿里巴巴 FunASR（不推荐用于此场景）
+- [pyannote speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) — 可选说话人分离升级方案
