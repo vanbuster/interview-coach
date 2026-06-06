@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{公司名} {岗位名} 面试复盘</title>
+<style>
+  :root { --border: #e2e8f0; --bg: #f8fafc; --accent: #3b82f6; --text: #1e293b; --muted: #64748b; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; color: var(--text); background: var(--bg); line-height: 1.7; padding: 0 16px 48px; }
+  .container { max-width: 800px; margin: 0 auto; }
+  h1 { font-size: 1.6em; padding: 32px 0 16px; border-bottom: 3px solid var(--accent); margin-bottom: 24px; }
+  h2 { font-size: 1.3em; margin: 32px 0 16px; padding-bottom: 8px; border-bottom: 1px solid var(--border); color: var(--accent); }
+  h3 { font-size: 1.1em; margin: 24px 0 12px; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+  th, td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
+  th { background: #f1f5f9; font-weight: 600; width: 120px; }
+  ul, ol { padding-left: 24px; margin: 8px 0; }
+  li { margin: 4px 0; }
+  strong { color: var(--text); }
+
+  /* Q&A 卡片 */
+  .qa-card { background: white; border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin: 16px 0; }
+  .qa-card h3 { margin: 0 0 12px; color: var(--accent); font-size: 1.1em; }
+  .qa-card .label { font-weight: 600; color: var(--muted); margin-top: 12px; }
+  .qa-card .content { margin: 4px 0 4px 12px; }
+
+  /* 音频播放器 */
+  .audio-player { margin: 12px 0; }
+  audio { width: 100%; max-width: 400px; border-radius: 6px; }
+
+  /* 评分 */
+  .rating { color: #f59e0b; font-size: 1.1em; letter-spacing: 2px; }
+
+  /* Checklist */
+  .checklist { list-style: none; padding-left: 0; }
+  .checklist li { padding: 6px 0; border-bottom: 1px dashed var(--border); }
+  .checklist li::before { content: "☐ "; color: var(--muted); font-size: 1.2em; }
+
+  /* 更优解 */
+  .better-answer { background: #eff6ff; border-left: 3px solid var(--accent); padding: 12px 16px; margin: 12px 0; border-radius: 0 6px 6px 0; }
+  .better-answer .label { color: var(--accent); }
+
+  /* 分隔线 */
+  .divider { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>{公司名} {岗位名} 面试复盘</h1>
+
+<!-- 一、面试基本信息 -->
+<h2>一、面试基本信息</h2>
+<table>
+  <tr><th>公司</th><td>{公司名}</td></tr>
+  <tr><th>岗位</th><td>{岗位名}</td></tr>
+  <tr><th>面试轮次</th><td>{轮次}</td></tr>
+  <tr><th>面试日期</th><td>{日期}</td></tr>
+  <tr><th>面试时长</th><td>{时长}</td></tr>
+  <tr><th>面试官角色</th><td>{角色}</td></tr>
+</table>
+
+<!-- 二、公司 & 岗位画像 -->
+<h2>二、公司 & 岗位画像</h2>
+<p><strong>公司背景</strong>：{公司背景}</p>
+<p><strong>岗位核心</strong>：{岗位核心要求}</p>
+<p><strong>JD 匹配要求</strong>：{匹配要求}</p>
+
+<!-- 三、面试问答逐题复盘 -->
+<h2>三、面试问答逐题复盘</h2>
+
+<!-- Q01 模板（按实际题数复制） -->
+<div class="qa-card">
+  <h3>Q01：{问题标题}</h3>
+  <div class="audio-player">
+    <audio controls preload="metadata">
+      <source src="segments/Q01.mp3" type="audio/mpeg">
+    </audio>
+  </div>
+  <p class="label">面试官提问</p>
+  <p class="content">{提问内容}</p>
+  <p class="label">我的回答</p>
+  <p class="content">{回答内容}</p>
+  <p class="label">评估</p>
+  <p class="content"><span class="rating">{评分星级}</span></p>
+  <p class="content">{评估内容}</p>
+  <div class="better-answer">
+    <p class="label">更优解建议</p>
+    <p class="content">{更优解内容}</p>
+  </div>
+</div>
+
+<!-- Q02...Q09 按实际题数继续 -->
+
+<hr class="divider">
+
+<!-- 四、面试官评价总结 -->
+<h2>四、面试官评价总结</h2>
+<p><strong>面试官整体态度</strong>：{态度描述}</p>
+<p><strong>整体表现评分</strong>：<span class="rating">{评分}</span></p>
+<p class="label">核心优势</p>
+<ul>
+  <li>{优势 1}</li>
+  <li>{优势 2}</li>
+</ul>
+<p class="label">需要提升</p>
+<ul>
+  <li>{不足 1}</li>
+  <li>{不足 2}</li>
+</ul>
+
+<!-- 五、备战 Checklist -->
+<h2>五、备战 Checklist</h2>
+<ul class="checklist">
+  <li>{Checklist 项 1}</li>
+  <li>{Checklist 项 2}</li>
+  <li>{Checklist 项 3}</li>
+</ul>
+
+</div>
+</body>
+</html>

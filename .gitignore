@@ -1,0 +1,30 @@
+# Model cache (auto-downloaded by mlx-whisper, ~489MB)
+*.gguf
+models/
+.huggingface/
+
+# Audio files (user's interview recordings)
+*.mp3
+*.m4a
+*.wav
+*.qta
+
+# Transcription outputs
+segments/
+transcript_*
+boundaries.json
+whisper_words.json
+funasr_result.json
+
+# Keep package.json if present
+!package.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
