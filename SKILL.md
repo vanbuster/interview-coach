@@ -8,16 +8,17 @@ when_to_use: |
   - 触发关键词：面试、复盘、interview review、答面
 ---
 
-# 面试复盘教练
+# 面试复盘教练 (Windows / Linux / macOS)
 
 > **项目主页**：`github.com/vanbuster/interview-coach`
+> **分支**：`windows` — 使用 faster-whisper (CTranslate2)，跨平台兼容
 > 所有脚本和模板在项目仓库中维护，本 Skill 为 Agent 执行指令。
 
 ## 工作流程
 
 ```
 录音 → [本地转写] → 完整文本+时间戳 → [LLM 识别问答边界] → 按边界切音频
-  → 生成复盘内容 → 创建飞书文档 → 嵌入音频片段 → 设置权限 → 交付 URL
+  → 生成复盘内容 → 创建飞书文档 或 HTML → 嵌入音频片段 → 交付
 ```
 
 **核心原则**：先完整转写，再从文本中识别问答边界，最后按边界切音频。禁止先切音频再转写。
@@ -27,14 +28,14 @@ when_to_use: |
 ### Phase 0：环境检查
 
 确认以下工具可用：
-- `python3 scripts/transcribe.py --help` — 转写
-- `python3 scripts/split_audio.py --help` — 切分
+- `python scripts/transcribe.py --help` — 转写
+- `python scripts/split_audio.py --help` — 切分
 - `ffmpeg -version` — 音频处理
 
-如缺少依赖，运行 `bash setup.sh` 一键安装（ffmpeg + Python 依赖 + Whisper 模型预下载）。
+如缺少依赖，运行 `setup.ps1` 一键安装（ffmpeg + Python 依赖 + Whisper 模型预下载）。
 
 检测输出通道（决定 Phase 5 用哪种格式）：
-- `command -v lark-cli` — 如果可用 → 飞书输出（Tier 1）
+- `command -v lark-cli`（或 `where lark-cli` on Windows） — 如果可用 → 飞书输出（Tier 1）
 - 否则 → HTML 输出（Tier 2，零依赖降级）
 
 ---
@@ -44,7 +45,7 @@ when_to_use: |
 1. **收集素材**：
    - JD 图片 → 用 `analyze_image` MCP 工具提取。注意：只支持远程 URL，需先用 Read 工具读图（自动上传 CDN）再获取 URL
    - 面试笔记 PDF → 用 PyPDF2 提取文本
-   - 面试录音 → 确认音频文件路径（支持 .mp3/.m4a/.wav/.qta 等）
+   - 面试录音 → 确认音频文件路径（支持 .mp3/.m4a/.wav 等）
 
 2. **转码**（如需要）：
    ```bash
@@ -56,17 +57,17 @@ when_to_use: |
 ### Phase 2：音频转写（本地执行，零 Token 消耗）
 
 ```bash
-# 默认：Whisper medium（中文质量最优，词级时间戳 ~20ms，~1.5min 处理 30min 音频）
-python3 scripts/transcribe.py output.mp3
+# 默认：Whisper medium + CPU INT8（中文质量最优，词级时间戳 ~20ms）
+python scripts/transcribe.py output.mp3
 
-# 速度优先：large-v3-turbo（~1.3min，但中文开头易幻觉循环）
-python3 scripts/transcribe.py output.mp3 --model large-v3-turbo
+# NVIDIA GPU 加速（速度提升 3-5x）
+python scripts/transcribe.py output.mp3 --device cuda --compute-type float16
 
-# SenseVoice 备选（无词级时间戳，不推荐用于面试复盘）
-python3 scripts/transcribe.py output.mp3 --engine sensevoice
+# 速度优先：large-v3-turbo
+python scripts/transcribe.py output.mp3 --model large-v3-turbo
 ```
 
-**为什么用 Whisper**：Whisper 的 `word_timestamps=True` 提供每个词的精确起止时间（~20ms），使 Phase 3 能在转写文本中精确定位问答边界。SenseVoice 只返回整段文本无内部时间戳，边界只能靠估算。
+**为什么用 faster-whisper**：faster-whisper 使用 CTranslate2 后端，支持 CPU (INT8) 和 NVIDIA GPU (CUDA)，提供与 MLX Whisper 相同的词级时间戳精度（~20ms），且跨平台兼容。
 
 **输出**（与录音同目录）：
 - `transcript_full.json` — 完整 JSON（segments 内含 word-level timestamps）
@@ -90,14 +91,13 @@ python3 scripts/transcribe.py output.mp3 --engine sensevoice
 3. 用 `transcript_words.json` 精确定位每句的时间戳：
    ```python
    # 在词级索引中搜索关键句，返回精确起始秒数
-   python3 -c "
+   python -c "
    import json
    words = json.load(open('transcript_words.json'))
    query = '这个产品的话可以具体讲一下'
    text_all = ''.join(w['word'] for w in words)
    pos = text_all.find(query)
    if pos >= 0:
-       # 找到对应词的索引
        char_count = 0
        for w in words:
            char_count += len(w['word'])
@@ -122,7 +122,7 @@ python3 scripts/transcribe.py output.mp3 --engine sensevoice
 ### Phase 4：按边界切分音频
 
 ```bash
-python3 scripts/split_audio.py output.mp3 --boundaries boundaries.json --output segments
+python scripts/split_audio.py output.mp3 --boundaries boundaries.json --output segments
 ```
 
 输出 `segments/Q01.mp3`, `segments/Q02.mp3`, ... + `segments_manifest.json`
@@ -265,11 +265,10 @@ lark-cli drive permission.public patch \
 
 | 工具 | 必需 | 用途 | 安装 |
 |------|------|------|------|
-| ffmpeg | ✅ | 音频转码/切分 | `brew install ffmpeg` |
-| Python 3.10+ | ✅ | 转写脚本 | 系统预装 |
-| mlx-whisper | ✅ | Whisper 引擎（默认） | `pip install mlx-whisper` |
-| mlx-audio | ❌ 备选 | SenseVoice 引擎 | `pip install mlx-audio` |
+| ffmpeg | ✅ | 音频转码/切分 | `winget install Gyan.FFmpeg` |
+| Python 3.10+ | ✅ | 转写脚本 | python.org |
+| faster-whisper | ✅ | Whisper 引擎 (CTranslate2) | `pip install faster-whisper` |
 | lark-cli | ❌ 可选 | 飞书文档输出 | `npm install -g lark-cli` |
 
-> 一键安装：`bash setup.sh`（自动安装 ffmpeg + Python 依赖 + 预下载 Whisper 模型）
-> Whisper 为默认引擎：提供词级时间戳（~20ms 精度），使问答边界定位精确到秒。SenseVoice 无内部时间戳，仅作备选。
+> 一键安装：`powershell -ExecutionPolicy Bypass -File setup.ps1`
+> GPU 加速：安装 CUDA Toolkit 后使用 `--device cuda --compute-type float16`
