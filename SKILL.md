@@ -8,45 +8,105 @@ when_to_use: |
   - 触发关键词：面试、复盘、interview review、答面
 ---
 
-# 面试复盘教练
+# 面试复盘教练 (Windows / Linux / macOS)
 
 > **项目主页**：`github.com/vanbuster/interview-coach`
+> **分支**：`windows` — 使用 faster-whisper (CTranslate2)，跨平台兼容
 > 所有脚本和模板在项目仓库中维护，本 Skill 为 Agent 执行指令。
 
 ## 工作流程
 
 ```
 录音 → [本地转写] → 完整文本+时间戳 → [LLM 识别问答边界] → 按边界切音频
-  → 生成复盘内容 → 创建飞书文档 → 嵌入音频片段 → 设置权限 → 交付 URL
+  → 生成复盘内容 → 创建飞书文档 或 HTML → 嵌入音频片段 → 交付
 ```
 
 **核心原则**：先完整转写，再从文本中识别问答边界，最后按边界切音频。禁止先切音频再转写。
 
 ---
 
-### Phase 0：环境检查
+### Phase 0：环境检查 + 偏好加载
+
+**环境检查**：
 
 确认以下工具可用：
-- `python3 scripts/transcribe.py --help` — 转写
-- `python3 scripts/split_audio.py --help` — 切分
+- `python scripts/transcribe.py --help` — 转写
+- `python scripts/split_audio.py --help` — 切分
 - `ffmpeg -version` — 音频处理
 
-如缺少依赖，运行 `bash setup.sh` 一键安装（ffmpeg + Python 依赖 + Whisper 模型预下载）。
+如缺少依赖，运行 `setup.ps1` 一键安装（ffmpeg + Python 依赖 + Whisper 模型预下载）。
+
+**偏好加载（Reflection 机制）**：
+
+检查项目根目录是否存在 `user_config.json`：
+
+```bash
+# Linux/macOS
+cat user_config.json 2>/dev/null
+# Windows PowerShell
+Get-Content user_config.json -ErrorAction SilentlyContinue
+```
+
+- **如果存在** → 加载已保存偏好（`output_channel` / `model` / `language` / `device` / `compute_type`），后续 Phase 跳过对应询问
+- **如果不存在** → 标记为首次运行，后续流程中会询问偏好并保存
+
+配置文件格式：
+```json
+{
+  "version": 1,
+  "output_channel": "html",
+  "language": "zh",
+  "model": "medium",
+  "device": "auto",
+  "compute_type": "auto",
+  "run_count": 3,
+  "first_run": "2026-06-01",
+  "last_run": "2026-06-06"
+}
+```
+
+**偏好优先级**：用户本次输入 > user_config.json > 默认值
 
 检测输出通道（决定 Phase 5 用哪种格式）：
-- `command -v lark-cli` — 如果可用 → 飞书输出（Tier 1）
+- `command -v lark-cli`（或 `where lark-cli` on Windows） — 如果可用 → 飞书输出（Tier 1）
 - 否则 → HTML 输出（Tier 2，零依赖降级）
 
 ---
 
-### Phase 1：信息采集
+### Phase 1：信息采集（文件夹扫描）
 
-1. **收集素材**：
-   - JD 图片 → 用 `analyze_image` MCP 工具提取。注意：只支持远程 URL，需先用 Read 工具读图（自动上传 CDN）再获取 URL
-   - 面试笔记 PDF → 用 PyPDF2 提取文本
-   - 面试录音 → 确认音频文件路径（支持 .mp3/.m4a/.wav/.qta 等）
+**核心改进**：用户只需提供素材文件夹路径，Agent 自动扫描识别所有素材。
 
-2. **转码**（如需要）：
+1. **接受输入**：
+   - 文件夹路径（如 `C:\Users\...\智科谷\` 或 `/path/to/智科谷/`）
+   - 或逐个文件路径（向后兼容）
+
+2. **自动扫描文件夹**（如果提供了文件夹路径）：
+
+   ```bash
+   # 扫描音频文件
+   ls /path/to/folder/*.{mp3,m4a,wav,qta} 2>/dev/null
+   # Windows: Get-ChildItem C:\path\*.mp3, C:\path\*.m4a
+   # 扫描 JD 图片
+   ls /path/to/folder/*.{png,jpg,jpeg} 2>/dev/null
+   # 扫描面试笔记
+   ls /path/to/folder/*.{pdf,txt,md} 2>/dev/null
+   ```
+
+   **扫描规则**：
+   - **音频**（必须）：
+     - 恰好 1 个 → 自动选择，无需询问
+     - 多个 → 用 `AskUserQuestion` 让用户选
+     - 0 个 → 提示用户提供录音文件路径
+   - **JD 图片**（可选）：
+     - 找到 → 用 `analyze_image` MCP 工具提取
+     - 没找到 → 不阻塞，可后续让用户提供
+   - **面试笔记**（可选）：
+     - PDF → 用 PyPDF2 提取文本
+     - TXT/MD → 直接读取
+     - 没找到 → 不阻塞
+
+3. **转码**（如需要）：
    ```bash
    ffmpeg -i "input.{ext}" -map 0:0 -acodec libmp3lame -ab 128k "output.mp3"
    ```
@@ -56,17 +116,17 @@ when_to_use: |
 ### Phase 2：音频转写（本地执行，零 Token 消耗）
 
 ```bash
-# 默认：Whisper medium（中文质量最优，词级时间戳 ~20ms，~1.5min 处理 30min 音频）
-python3 scripts/transcribe.py output.mp3
+# 使用已保存的模型/设备偏好（或默认 medium + auto）
+python scripts/transcribe.py output.mp3
 
-# 速度优先：large-v3-turbo（~1.3min，但中文开头易幻觉循环）
-python3 scripts/transcribe.py output.mp3 --model large-v3-turbo
+# NVIDIA GPU 加速（速度提升 3-5x）
+python scripts/transcribe.py output.mp3 --device cuda --compute-type float16
 
-# SenseVoice 备选（无词级时间戳，不推荐用于面试复盘）
-python3 scripts/transcribe.py output.mp3 --engine sensevoice
+# 速度优先：large-v3-turbo
+python scripts/transcribe.py output.mp3 --model large-v3-turbo
 ```
 
-**为什么用 Whisper**：Whisper 的 `word_timestamps=True` 提供每个词的精确起止时间（~20ms），使 Phase 3 能在转写文本中精确定位问答边界。SenseVoice 只返回整段文本无内部时间戳，边界只能靠估算。
+**为什么用 faster-whisper**：faster-whisper 使用 CTranslate2 后端，支持 CPU (INT8) 和 NVIDIA GPU (CUDA)，提供与 MLX Whisper 相同的词级时间戳精度（~20ms），且跨平台兼容。
 
 **输出**（与录音同目录）：
 - `transcript_full.json` — 完整 JSON（segments 内含 word-level timestamps）
@@ -90,14 +150,13 @@ python3 scripts/transcribe.py output.mp3 --engine sensevoice
 3. 用 `transcript_words.json` 精确定位每句的时间戳：
    ```python
    # 在词级索引中搜索关键句，返回精确起始秒数
-   python3 -c "
+   python -c "
    import json
    words = json.load(open('transcript_words.json'))
    query = '这个产品的话可以具体讲一下'
    text_all = ''.join(w['word'] for w in words)
    pos = text_all.find(query)
    if pos >= 0:
-       # 找到对应词的索引
        char_count = 0
        for w in words:
            char_count += len(w['word'])
@@ -122,7 +181,7 @@ python3 scripts/transcribe.py output.mp3 --engine sensevoice
 ### Phase 4：按边界切分音频
 
 ```bash
-python3 scripts/split_audio.py output.mp3 --boundaries boundaries.json --output segments
+python scripts/split_audio.py output.mp3 --boundaries boundaries.json --output segments
 ```
 
 输出 `segments/Q01.mp3`, `segments/Q02.mp3`, ... + `segments_manifest.json`
@@ -154,9 +213,15 @@ python3 scripts/split_audio.py output.mp3 --boundaries boundaries.json --output 
 
 注意：Markdown 中**不写**"录音片段"占位符（音频通过 5.3a 或 5.3b 嵌入）。
 
-#### 5.2 选择输出渠道
+#### 5.2 选择输出渠道（偏好驱动）
 
-在开始输出前，用 `AskUserQuestion` 让用户选择生成渠道：
+**如果有已保存的偏好**（`user_config.json` 中 `output_channel` 存在）：
+- 直接使用已保存的渠道，**不询问**
+- 告知用户："使用已保存的输出渠道：{html/feishu}，如需更改请说「切换输出渠道」"
+
+**如果是首次运行或无偏好**：
+
+用 `AskUserQuestion` 让用户选择生成渠道：
 
 ```
 问题：选择复盘文档的输出渠道：
@@ -249,6 +314,34 @@ lark-cli drive permission.public patch \
 
 ---
 
+### Phase 6：保存偏好（Reflection 沉淀）
+
+在交付完成后，保存/更新 `user_config.json`：
+
+1. 读取已有 `user_config.json`（如果存在）
+2. 更新字段：
+   ```json
+   {
+     "version": 1,
+     "output_channel": "<本次使用的输出渠道>",
+     "language": "<本次使用的语言>",
+     "model": "<本次使用的模型>",
+     "device": "<本次使用的设备>",
+     "compute_type": "<本次使用的精度>",
+     "run_count": <累计次数 +1>,
+     "first_run": "<首次运行日期，不变>",
+     "last_run": "<当前日期>"
+   }
+   ```
+3. 写入项目根目录的 `user_config.json`
+
+**写入规则**：
+- 每次运行完成后**必须保存**（即使用户未更改偏好，也更新 `last_run` 和 `run_count`）
+- 只保存偏好字段，不保存面试内容
+- 用户主动说"切换输出渠道"时，也更新此文件
+
+---
+
 ## 约束
 
 - **禁止**先用 ffmpeg 按固定时长切分音频再转写。必须完整转写 → 文本分析 → 按内容边界切分
@@ -265,11 +358,11 @@ lark-cli drive permission.public patch \
 
 | 工具 | 必需 | 用途 | 安装 |
 |------|------|------|------|
-| ffmpeg | ✅ | 音频转码/切分 | `brew install ffmpeg` |
-| Python 3.10+ | ✅ | 转写脚本 | 系统预装 |
-| mlx-whisper | ✅ | Whisper 引擎（默认） | `pip install mlx-whisper` |
-| mlx-audio | ❌ 备选 | SenseVoice 引擎 | `pip install mlx-audio` |
+| ffmpeg | ✅ | 音频转码/切分 | `winget install Gyan.FFmpeg` |
+| Python 3.10+ | ✅ | 转写脚本 | python.org |
+| faster-whisper | ✅ | Whisper 引擎 (CTranslate2) | `pip install faster-whisper` |
 | lark-cli | ❌ 可选 | 飞书文档输出 | `npm install -g lark-cli` |
 
-> 一键安装：`bash setup.sh`（自动安装 ffmpeg + Python 依赖 + 预下载 Whisper 模型）
-> Whisper 为默认引擎：提供词级时间戳（~20ms 精度），使问答边界定位精确到秒。SenseVoice 无内部时间戳，仅作备选。
+> 一键安装：`powershell -ExecutionPolicy Bypass -File setup.ps1`
+> GPU 加速：安装 CUDA Toolkit 后使用 `--device cuda --compute-type float16`
+> Reflection 机制：首次运行建立偏好，后续只需提供素材文件夹路径即可自动执行全流程。

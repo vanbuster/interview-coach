@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-interview-coach: 音频转写脚本 — Apple Silicon 原生 (MLX)
+interview-coach: 音频转写脚本 — Windows / Linux / macOS (faster-whisper)
 
-将面试录音转写为带时间戳的文本，支持两种引擎：
-  - whisper (默认): mlx-whisper，词级时间戳 (~20ms 精度)，原生支持长音频
-  - sensevoice: SenseVoiceSmall，中文语音识别，无内部时间戳
+将面试录音转写为带时间戳的文本：
+  - whisper (默认): faster-whisper (CTranslate2)，词级时间戳 (~20ms 精度)
+  - 支持 CPU (INT8) 和 NVIDIA GPU (CUDA)
 
 用法:
-  python3 scripts/transcribe.py <audio_file>
-  python3 scripts/transcribe.py <audio_file> --model large-v3-turbo
-  python3 scripts/transcribe.py <audio_file> --engine sensevoice
+  python scripts/transcribe.py <audio_file>
+  python scripts/transcribe.py <audio_file> --model large-v3-turbo
+  python scripts/transcribe.py <audio_file> --device cuda --compute-type float16
 """
 
 import argparse
@@ -30,174 +30,64 @@ def get_audio_duration(audio_path: str) -> float:
     return float(result.stdout.strip())
 
 
-def split_audio_chunks(audio_path: str, chunk_duration: int, overlap: int, output_dir: str):
-    """将音频切成重叠片段，返回片段信息列表。"""
-    os.makedirs(output_dir, exist_ok=True)
-    duration = get_audio_duration(audio_path)
-    chunks = []
-    start = 0
-    idx = 0
-    while start < duration:
-        end = min(start + chunk_duration, duration)
-        chunk_path = os.path.join(output_dir, f"chunk_{idx:03d}.wav")
-        ffmpeg_cmd = [
-            "ffmpeg", "-y", "-i", audio_path,
-            "-ss", str(start), "-to", str(end),
-            "-ar", "16000", "-ac", "1",
-            "-f", "wav", chunk_path,
-        ]
-        subprocess.run(ffmpeg_cmd, capture_output=True)
-        chunks.append({"index": idx, "path": chunk_path, "start": start, "end": end})
-        idx += 1
-        start += chunk_duration - overlap  # overlap window
-    return chunks, duration
+def transcribe_whisper(
+    audio_path: str,
+    model: str = "medium",
+    language: str = "zh",
+    device: str = "auto",
+    compute_type: str = "auto",
+):
+    """Whisper 转写（faster-whisper / CTranslate2 后端，跨平台）。"""
+    from faster_whisper import WhisperModel
 
+    # 自动选择设备和精度
+    if device == "auto":
+        try:
+            import torch
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        except ImportError:
+            device = "cpu"
 
-def transcribe_sensevoice_chunk(chunk_path: str, chunk_start: float, chunk_end: float):
-    """转写单个 SenseVoice 切片，返回带时间戳的片段。"""
-    from mlx_audio.stt.generate import generate_transcription
+    if compute_type == "auto":
+        compute_type = "float16" if device == "cuda" else "int8"
 
-    result = generate_transcription(model="mlx-community/SenseVoiceSmall", audio=chunk_path)
-
-    text = ""
-    if hasattr(result, "text") and result.text:
-        text = result.text
-    elif hasattr(result, "segments") and result.segments:
-        text = " ".join(s.get("text", "") for s in result.segments if s.get("text"))
-
-    # SenseVoice 返回整段无内部时间戳，我们用 chunk 边界作为时间戳
-    return [{"start": chunk_start, "end": chunk_end, "text": text}]
-
-
-def merge_chunk_texts(chunks_with_text, overlap_seconds: int = 30):
-    """合并重叠切片文本。
-
-    SenseVoice 每个切片返回整段文本（无内部时间戳），
-    简单策略：每个切片取非重叠部分的文本比例，拼接。
-    重叠比例 = overlap_seconds / chunk_duration ≈ 12.5%
-    """
-    if not chunks_with_text:
-        return [], ""
-
-    ratio_skip = overlap_seconds / (chunks_with_text[0]["end"] - chunks_with_text[0]["start"]) if chunks_with_text else 0
-
-    all_segments = []
-    text_parts = []
-
-    for i, chunk in enumerate(chunks_with_text):
-        txt = chunk.get("text", "").strip()
-        if not txt:
-            continue
-
-        # 第一个切片取全文，后续切片跳过重叠部分
-        if i == 0:
-            clean = txt
-        else:
-            # 跳过开头 ~12.5% 字符（对应重叠区）
-            skip = int(len(txt) * ratio_skip)
-            clean = txt[skip:]
-
-        if clean.strip():
-            text_parts.append(clean.strip())
-            all_segments.append({
-                "start": chunk["start"],
-                "end": chunk["end"],
-                "text": clean.strip(),
-            })
-
-    full_text = " ".join(text_parts)
-    return all_segments, full_text
-
-
-def transcribe_sensevoice(audio_path: str):
-    """SenseVoice 转写：短音频直接转，长音频自动 overlap 切片。"""
-    from mlx_audio.stt.generate import generate_transcription
-
-    duration = get_audio_duration(audio_path)
-    chunk_duration = 240  # 4 分钟切片（安全 Metal 内存）
-    overlap = 30  # 30 秒重叠
-
-    print(f"Audio duration: {duration:.0f}s", flush=True)
-    print(f"Engine: SenseVoice (MLX)", flush=True)
-    print(f"Model: mlx-community/SenseVoiceSmall", flush=True)
-
-    if duration <= chunk_duration:
-        print("Short audio — direct transcription", flush=True)
-        start_t = time.time()
-        result = generate_transcription(model="mlx-community/SenseVoiceSmall", audio=audio_path)
-        elapsed = time.time() - start_t
-        print(f"Completed in {elapsed:.1f}s", flush=True)
-
-        segments = []
-        if hasattr(result, "segments") and result.segments:
-            for seg in result.segments:
-                segments.append({
-                    "start": seg.get("start", 0),
-                    "end": seg.get("end", 0),
-                    "text": seg.get("text", ""),
-                })
-        if not segments and hasattr(result, "text") and result.text:
-            segments.append({"start": 0, "end": duration, "text": result.text})
-
-        return {"text": result.text if hasattr(result, "text") else "", "segments": segments}, elapsed
-
-    print(f"Long audio — chunking ({chunk_duration}s windows, {overlap}s overlap)", flush=True)
-    tmp_dir = os.path.join(os.path.dirname(audio_path), f".transcribe_chunks_{int(time.time())}")
-    try:
-        chunks, _ = split_audio_chunks(audio_path, chunk_duration, overlap, tmp_dir)
-        print(f"Split into {len(chunks)} chunks", flush=True)
-
-        chunks_with_text = []
-        total_elapsed = 0
-
-        for i, chunk in enumerate(chunks):
-            print(f"  Chunk {i+1}/{len(chunks)} ({chunk['start']:.0f}s-{chunk['end']:.0f}s)...", flush=True, end="")
-            start_t = time.time()
-            segs = transcribe_sensevoice_chunk(chunk["path"], chunk["start"], chunk["end"])
-            chunk_elapsed = time.time() - start_t
-            total_elapsed += chunk_elapsed
-            for s in segs:
-                chunks_with_text.append(s)
-            print(f" {chunk_elapsed:.1f}s", flush=True)
-
-        print(f"\nMerging overlapped chunks...", flush=True)
-        merged_segments, full_text = merge_chunk_texts(chunks_with_text, overlap)
-        print(f"Merged: {len(merged_segments)} segments, {len(full_text)} chars", flush=True)
-
-        return {"text": full_text, "segments": merged_segments}, total_elapsed
-
-    finally:
-        # 清理临时切片
-        for chunk in chunks:
-            if os.path.exists(chunk["path"]):
-                os.remove(chunk["path"])
-        if os.path.isdir(tmp_dir):
-            os.rmdir(tmp_dir)
-
-
-def transcribe_whisper(audio_path: str, model: str = "medium", language: str = "zh"):
-    """Whisper 转写（原生支持长音频，无需切片）。"""
-    import mlx_whisper
-
-    # 支持 4bit 后缀自动映射到量化仓库
-    if model.endswith("-4bit"):
-        hf_repo = f"mlx-community/whisper-{model}"
-    else:
-        hf_repo = f"mlx-community/whisper-{model}"
-    print(f"Engine: mlx-whisper", flush=True)
-    print(f"Model: {hf_repo}", flush=True)
+    print(f"Engine: faster-whisper (CTranslate2)", flush=True)
+    print(f"Model: {model}", flush=True)
+    print(f"Device: {device} | Compute: {compute_type}", flush=True)
     print(f"Language: {language}", flush=True)
 
     start_t = time.time()
-    result = mlx_whisper.transcribe(
+    fw_model = WhisperModel(model, device=device, compute_type=compute_type)
+    segments_iter, info = fw_model.transcribe(
         audio_path,
-        path_or_hf_repo=hf_repo,
         language=language,
         word_timestamps=True,
-        verbose=False,
+        vad_filter=True,
     )
-    elapsed = time.time() - start_t
 
+    # Collect segments into same format as mlx-whisper output
+    segments = []
+    all_text_parts = []
+    for seg in segments_iter:
+        words = []
+        for w in seg.words:
+            words.append({
+                "word": w.word,
+                "start": w.start,
+                "end": w.end,
+                "probability": w.probability,
+            })
+        segments.append({
+            "id": seg.id,
+            "start": seg.start,
+            "end": seg.end,
+            "text": seg.text,
+            "words": words,
+        })
+        all_text_parts.append(seg.text)
+
+    elapsed = time.time() - start_t
+    result = {"text": "".join(all_text_parts), "segments": segments}
     return result, elapsed
 
 
@@ -263,25 +153,23 @@ def save_results(result, elapsed: float, audio_path: str):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="interview-coach: 面试录音转写 (Apple Silicon)")
+    parser = argparse.ArgumentParser(description="interview-coach: 面试录音转写 (faster-whisper)")
     parser.add_argument("audio_file", help="音频文件路径")
-    parser.add_argument(
-        "--engine", default="whisper", choices=["whisper", "sensevoice"],
-        help="转写引擎: whisper(默认,词级时间戳) / sensevoice(无时间戳)",
-    )
-    parser.add_argument("--model", default=None,
-                        help="Whisper 模型: medium(默认,中文质量好) / large-v3-turbo(更快) / small / tiny")
+    parser.add_argument("--model", default="medium",
+                        help="Whisper 模型: medium(默认,中文质量好) / large-v3-turbo / small / tiny")
     parser.add_argument("--language", default="zh", help="Whisper 语言代码 (默认 zh)")
+    parser.add_argument("--device", default="auto",
+                        help="计算设备: auto(自动检测) / cpu / cuda")
+    parser.add_argument("--compute-type", default="auto",
+                        help="计算精度: auto / int8(cpu) / float16(cuda) / float32")
     args = parser.parse_args()
 
     if not os.path.exists(args.audio_file):
         print(f"Error: file not found: {args.audio_file}", file=sys.stderr)
         sys.exit(1)
 
-    if args.engine == "sensevoice":
-        result, elapsed = transcribe_sensevoice(args.audio_file)
-    else:
-        model = args.model or "medium"
-        result, elapsed = transcribe_whisper(args.audio_file, model, args.language)
-
+    result, elapsed = transcribe_whisper(
+        args.audio_file, args.model, args.language,
+        args.device, args.compute_type,
+    )
     save_results(result, elapsed, args.audio_file)
