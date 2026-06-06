@@ -152,8 +152,7 @@ interview-coach/
 ├── templates/
 │   ├── interview-review-template.md  # Markdown 模板
 │   └── interview-review-template.html # HTML 模板（含音频播放器）
-├── references/                       # 参考资料
-└── docs/                             # 模型选型报告
+└── references/                       # 参考资料（含模型选型报告）
 ```
 
 ## 模型选型
