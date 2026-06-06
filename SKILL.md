@@ -24,7 +24,9 @@ when_to_use: |
 
 ---
 
-### Phase 0：环境检查
+### Phase 0：环境检查 + 偏好加载
+
+**环境检查**：
 
 确认以下工具可用：
 - `python3 scripts/transcribe.py --help` — 转写
@@ -33,20 +35,71 @@ when_to_use: |
 
 如缺少依赖，运行 `bash setup.sh` 一键安装（ffmpeg + Python 依赖 + Whisper 模型预下载）。
 
+**偏好加载（Reflection 机制）**：
+
+检查项目根目录是否存在 `user_config.json`：
+
+```bash
+cat user_config.json 2>/dev/null
+```
+
+- **如果存在** → 加载已保存偏好（`output_channel` / `model` / `language`），后续 Phase 跳过对应询问
+- **如果不存在** → 标记为首次运行，后续流程中会询问偏好并保存
+
+配置文件格式：
+```json
+{
+  "version": 1,
+  "output_channel": "html",
+  "language": "zh",
+  "model": "medium",
+  "run_count": 3,
+  "first_run": "2026-06-01",
+  "last_run": "2026-06-06"
+}
+```
+
+**偏好优先级**：用户本次输入 > user_config.json > 默认值
+
 检测输出通道（决定 Phase 5 用哪种格式）：
 - `command -v lark-cli` — 如果可用 → 飞书输出（Tier 1）
 - 否则 → HTML 输出（Tier 2，零依赖降级）
 
 ---
 
-### Phase 1：信息采集
+### Phase 1：信息采集（文件夹扫描）
 
-1. **收集素材**：
-   - JD 图片 → 用 `analyze_image` MCP 工具提取。注意：只支持远程 URL，需先用 Read 工具读图（自动上传 CDN）再获取 URL
-   - 面试笔记 PDF → 用 PyPDF2 提取文本
-   - 面试录音 → 确认音频文件路径（支持 .mp3/.m4a/.wav/.qta 等）
+**核心改进**：用户只需提供素材文件夹路径，Agent 自动扫描识别所有素材。
 
-2. **转码**（如需要）：
+1. **接受输入**：
+   - 文件夹路径（如 `/path/to/智科谷/`）
+   - 或逐个文件路径（向后兼容）
+
+2. **自动扫描文件夹**（如果提供了文件夹路径）：
+
+   ```bash
+   # 扫描音频文件
+   ls /path/to/folder/*.{mp3,m4a,wav,qta} 2>/dev/null
+   # 扫描 JD 图片
+   ls /path/to/folder/*.{png,jpg,jpeg} 2>/dev/null
+   # 扫描面试笔记
+   ls /path/to/folder/*.{pdf,txt,md} 2>/dev/null
+   ```
+
+   **扫描规则**：
+   - **音频**（必须）：
+     - 恰好 1 个 → 自动选择，无需询问
+     - 多个 → 用 `AskUserQuestion` 让用户选
+     - 0 个 → 提示用户提供录音文件路径
+   - **JD 图片**（可选）：
+     - 找到 → 用 `analyze_image` MCP 工具提取
+     - 没找到 → 不阻塞，可后续让用户提供
+   - **面试笔记**（可选）：
+     - PDF → 用 PyPDF2 提取文本
+     - TXT/MD → 直接读取
+     - 没找到 → 不阻塞
+
+3. **转码**（如需要）：
    ```bash
    ffmpeg -i "input.{ext}" -map 0:0 -acodec libmp3lame -ab 128k "output.mp3"
    ```
@@ -56,17 +109,14 @@ when_to_use: |
 ### Phase 2：音频转写（本地执行，零 Token 消耗）
 
 ```bash
-# 默认：Whisper medium（中文质量最优，词级时间戳 ~20ms，~1.5min 处理 30min 音频）
+# 使用已保存的模型偏好（或默认 medium）
 python3 scripts/transcribe.py output.mp3
 
-# 速度优先：large-v3-turbo（~1.3min，但中文开头易幻觉循环）
+# 速度优先：large-v3-turbo
 python3 scripts/transcribe.py output.mp3 --model large-v3-turbo
-
-# SenseVoice 备选（无词级时间戳，不推荐用于面试复盘）
-python3 scripts/transcribe.py output.mp3 --engine sensevoice
 ```
 
-**为什么用 Whisper**：Whisper 的 `word_timestamps=True` 提供每个词的精确起止时间（~20ms），使 Phase 3 能在转写文本中精确定位问答边界。SenseVoice 只返回整段文本无内部时间戳，边界只能靠估算。
+**为什么用 Whisper**：Whisper 的 `word_timestamps=True` 提供每个词的精确起止时间（~20ms），使 Phase 3 能在转写文本中精确定位问答边界。
 
 **输出**（与录音同目录）：
 - `transcript_full.json` — 完整 JSON（segments 内含 word-level timestamps）
@@ -154,9 +204,15 @@ python3 scripts/split_audio.py output.mp3 --boundaries boundaries.json --output 
 
 注意：Markdown 中**不写**"录音片段"占位符（音频通过 5.3a 或 5.3b 嵌入）。
 
-#### 5.2 选择输出渠道
+#### 5.2 选择输出渠道（偏好驱动）
 
-在开始输出前，用 `AskUserQuestion` 让用户选择生成渠道：
+**如果有已保存的偏好**（`user_config.json` 中 `output_channel` 存在）：
+- 直接使用已保存的渠道，**不询问**
+- 告知用户："使用已保存的输出渠道：{html/feishu}，如需更改请说「切换输出渠道」"
+
+**如果是首次运行或无偏好**：
+
+用 `AskUserQuestion` 让用户选择生成渠道：
 
 ```
 问题：选择复盘文档的输出渠道：
@@ -249,6 +305,32 @@ lark-cli drive permission.public patch \
 
 ---
 
+### Phase 6：保存偏好（Reflection 沉淀）
+
+在交付完成后，保存/更新 `user_config.json`：
+
+1. 读取已有 `user_config.json`（如果存在）
+2. 更新字段：
+   ```json
+   {
+     "version": 1,
+     "output_channel": "<本次使用的输出渠道>",
+     "language": "<本次使用的语言>",
+     "model": "<本次使用的模型>",
+     "run_count": <累计次数 +1>,
+     "first_run": "<首次运行日期，不变>",
+     "last_run": "<当前日期>"
+   }
+   ```
+3. 写入项目根目录的 `user_config.json`
+
+**写入规则**：
+- 每次运行完成后**必须保存**（即使用户未更改偏好，也更新 `last_run` 和 `run_count`）
+- 只保存偏好字段，不保存面试内容
+- 用户主动说"切换输出渠道"时，也更新此文件
+
+---
+
 ## 约束
 
 - **禁止**先用 ffmpeg 按固定时长切分音频再转写。必须完整转写 → 文本分析 → 按内容边界切分
@@ -273,3 +355,4 @@ lark-cli drive permission.public patch \
 
 > 一键安装：`bash setup.sh`（自动安装 ffmpeg + Python 依赖 + 预下载 Whisper 模型）
 > Whisper 为默认引擎：提供词级时间戳（~20ms 精度），使问答边界定位精确到秒。SenseVoice 无内部时间戳，仅作备选。
+> Reflection 机制：首次运行建立偏好，后续只需提供素材文件夹路径即可自动执行全流程。
