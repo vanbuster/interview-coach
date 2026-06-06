@@ -1,6 +1,6 @@
 #!/bin/bash
 # interview-coach — 一键安装脚本
-# 适用：macOS Apple Silicon (M-series)
+# 适用：Linux / macOS (faster-whisper 引擎)
 # 用法：bash setup.sh
 
 set -e
@@ -18,15 +18,10 @@ fail() { echo "${RED}[FAIL]${NC} $1"; }
 echo "=== interview-coach setup ==="
 echo ""
 
-# --- 1. macOS + Apple Silicon ---
-if [[ "$(uname)" != "Darwin" ]]; then
-    fail "This tool requires macOS with Apple Silicon."
-    echo "On Linux, replace mlx-whisper with openai-whisper in requirements.txt"
-    exit 1
-fi
-if [[ "$(uname -m)" != "arm64" ]]; then
-    warn "Not Apple Silicon (arm64). mlx-whisper may not work. Consider openai-whisper instead."
-fi
+# --- 1. Platform ---
+OS="$(uname)"
+ARCH="$(uname -m)"
+echo "Platform: $OS ($ARCH)"
 
 # --- 2. ffmpeg ---
 if command -v ffmpeg &>/dev/null; then
@@ -36,9 +31,12 @@ else
     if command -v brew &>/dev/null; then
         brew install ffmpeg
         ok "ffmpeg installed"
+    elif command -v apt-get &>/dev/null; then
+        sudo apt-get update && sudo apt-get install -y ffmpeg
+        ok "ffmpeg installed"
     else
-        fail "Homebrew not found. Install it: https://brew.sh"
-        echo "Then run: brew install ffmpeg"
+        fail "No supported package manager found (brew / apt-get)"
+        echo "Install ffmpeg manually: https://ffmpeg.org/download.html"
         exit 1
     fi
 fi
@@ -64,16 +62,15 @@ ok "Python packages installed"
 
 # --- 5. Pre-download Whisper model ---
 echo ""
-echo "Pre-downloading Whisper medium model (~489MB, one-time)..."
+echo "Pre-downloading Whisper medium model (~1.5GB, one-time)..."
 python3 -c "
-from huggingface_hub import snapshot_download
-snapshot_download('mlx-community/whisper-medium', ignore_patterns=['*.md', '*.txt'])
+from faster_whisper import WhisperModel
+print('Downloading and caching model...')
+model = WhisperModel('medium', device='cpu', compute_type='int8')
 print('Model cached successfully')
 " 2>/dev/null || {
     echo ""
     warn "Model pre-download failed (network issue?). Will auto-download on first transcription."
-    echo "You can manually download later:"
-    echo "  python3 -c \"from huggingface_hub import snapshot_download; snapshot_download('mlx-community/whisper-medium')\""
 }
 
 # --- 6. lark-cli (optional) ---
