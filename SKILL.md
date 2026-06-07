@@ -129,7 +129,7 @@ python3 scripts/transcribe.py output.mp3 --engine faster-whisper
 python3 scripts/transcribe.py output.mp3 --engine sensevoice
 ```
 
-**引擎选择**：`--engine auto`（默认）自动检测最佳引擎。macOS 优先 mlx-whisper（Metal 加速），其余平台用 faster-whisper（CTranslate2，CPU + NVIDIA CUDA）。所有 Whisper 引擎提供词级时间戳（~20ms 精度）。
+**引擎选择**：`--engine auto`（默认）自动检测最佳引擎。macOS 使用 **mlx-whisper**（Metal 加速，必选最佳实践），Linux/Windows 用 faster-whisper（CTranslate2，CPU + NVIDIA CUDA）。所有 Whisper 引擎提供词级时间戳（~20ms 精度）。
 
 **输出**（与录音同目录）：
 - `transcript_full.json` — 完整 JSON（segments 内含 word-level timestamps）
@@ -363,12 +363,12 @@ lark-cli drive permission.public patch \
 |------|------|------|------|
 | ffmpeg | ✅ | 音频转码/切分 | `brew install ffmpeg` / `apt install ffmpeg` |
 | Python 3.10+ | ✅ | 转写脚本 | 系统包管理器 |
-| faster-whisper | ✅ | Whisper 引擎 (CTranslate2，全平台) | `pip install faster-whisper` |
-| mlx-whisper | ❌ macOS | Metal 加速 Whisper | `pip install mlx-whisper` |
+| mlx-whisper | ✅ macOS | Whisper 引擎（Metal 加速，最佳实践） | `pip install mlx-whisper` |
+| faster-whisper | ✅ Linux/Win | Whisper 引擎 (CTranslate2) | `pip install faster-whisper` |
 | mlx-audio | ❌ macOS | SenseVoice 引擎（备选） | `pip install mlx-audio` |
 | lark-cli | ❌ 可选 | 飞书文档输出 | `npm install -g lark-cli` |
 
 > 一键安装：`bash setup.sh`（macOS/Linux）或 `powershell -ExecutionPolicy Bypass -File setup.ps1`（Windows）
-> 引擎自动选择：macOS 用 mlx-whisper (Metal)，其余平台用 faster-whisper (CTranslate2)
-> GPU 加速：NVIDIA GPU 使用 `--device cuda --compute-type float16`
+> macOS 最佳实践：mlx-whisper Metal 加速，33 分钟面试 1.5 分钟转写。
+> Linux/Windows：faster-whisper CTranslate2，支持 NVIDIA GPU（`--device cuda`）。
 > Reflection 机制：首次运行建立偏好，后续只需提供素材文件夹路径即可自动执行全流程。

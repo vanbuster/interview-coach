@@ -242,28 +242,29 @@ def transcribe_sensevoice(audio_path: str):
 # ---------------------------------------------------------------------------
 
 def detect_best_engine() -> str:
-    """Auto-detect best available engine for this platform."""
+    """Auto-detect best available engine for this platform.
+
+    macOS:  mlx-whisper is the required engine (Metal accelerated, best practice).
+            Falls back to faster-whisper with a warning if mlx-whisper is missing.
+    Others: faster-whisper (CTranslate2, cross-platform).
+    """
     if sys.platform == "darwin":
         try:
             import mlx_whisper
             return "mlx"
         except ImportError:
-            pass
+            print("WARNING: mlx-whisper not found on macOS. It is the recommended engine.", file=sys.stderr)
+            print("  Install with: pip install mlx-whisper", file=sys.stderr)
+            print("  Falling back to faster-whisper (CPU, slower).", file=sys.stderr)
     try:
         from faster_whisper import WhisperModel
         return "faster-whisper"
     except ImportError:
         pass
-    # macOS without faster-whisper — try mlx as last resort
-    if sys.platform == "darwin":
-        try:
-            import mlx_whisper
-            return "mlx"
-        except ImportError:
-            pass
     print("No Whisper engine found. Install one of:", file=sys.stderr)
-    print("  pip install faster-whisper       (all platforms)", file=sys.stderr)
-    print("  pip install mlx-whisper           (macOS Apple Silicon)", file=sys.stderr)
+    if sys.platform == "darwin":
+        print("  pip install mlx-whisper        (macOS, recommended)", file=sys.stderr)
+    print("  pip install faster-whisper       (Linux / Windows)", file=sys.stderr)
     sys.exit(1)
 
 

@@ -54,21 +54,12 @@ else
     exit 1
 fi
 
-# --- 4. pip install (faster-whisper: cross-platform) ---
+# --- 4. pip install ---
 echo ""
-echo "Installing Python packages (faster-whisper)..."
-pip3 install -r "$SCRIPT_DIR/requirements.txt"
-ok "faster-whisper installed"
-
-# --- 5. macOS extras: mlx-whisper + mlx-audio ---
 if [[ "$OS" == "Darwin" ]]; then
-    echo ""
-    echo "macOS detected — installing mlx-whisper (Metal acceleration)..."
-    if pip3 install mlx-whisper 2>/dev/null; then
-        ok "mlx-whisper installed (Metal accelerated)"
-    else
-        warn "mlx-whisper install skipped (faster-whisper will be used instead)"
-    fi
+    echo "macOS detected — installing mlx-whisper (Metal accelerated, required)..."
+    pip3 install mlx-whisper
+    ok "mlx-whisper installed"
 
     echo "Installing mlx-audio (SenseVoice, optional)..."
     if pip3 install mlx-audio 2>/dev/null; then
@@ -76,20 +67,36 @@ if [[ "$OS" == "Darwin" ]]; then
     else
         warn "mlx-audio install skipped"
     fi
+else
+    echo "Installing Python packages (faster-whisper)..."
+    pip3 install -r "$SCRIPT_DIR/requirements.txt"
+    ok "faster-whisper installed"
 fi
 
 # --- 6. Pre-download Whisper model ---
 echo ""
-echo "Pre-downloading Whisper medium model (~1.5GB, one-time)..."
-python3 -c "
+if [[ "$OS" == "Darwin" ]]; then
+    echo "Pre-downloading Whisper medium model (mlx-whisper, one-time)..."
+    python3 -c "
+from huggingface_hub import snapshot_download
+snapshot_download('mlx-community/whisper-medium', ignore_patterns=['*.md', '*.txt'])
+print('Model cached successfully')
+" 2>/dev/null || {
+        echo ""
+        warn "Model pre-download failed (network issue?). Will auto-download on first transcription."
+    }
+else
+    echo "Pre-downloading Whisper medium model (~1.5GB, one-time)..."
+    python3 -c "
 from faster_whisper import WhisperModel
 print('Downloading and caching model...')
 model = WhisperModel('medium', device='cpu', compute_type='int8')
 print('Model cached successfully')
 " 2>/dev/null || {
-    echo ""
-    warn "Model pre-download failed (network issue?). Will auto-download on first transcription."
-}
+        echo ""
+        warn "Model pre-download failed (network issue?). Will auto-download on first transcription."
+    }
+fi
 
 # --- 7. NVIDIA GPU check (Linux/Windows WSL) ---
 if [[ "$OS" == "Linux" ]] && command -v nvidia-smi &>/dev/null; then
