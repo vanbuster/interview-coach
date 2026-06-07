@@ -1,14 +1,16 @@
-# Interview Coach — AI 面试复盘教练 (Windows / Linux / macOS)
+# 此分支已废弃 — 请使用 main 分支
 
-> 面试录音 → 结构化复盘文档，逐题提供更优解建议，音频与内容精确对应
+> **`main` 分支已统一支持所有平台**（macOS / Linux / Windows），自动检测最佳引擎。
+> 本 `windows` 分支不再维护。
 
-## 这是什么
+请使用：
 
-Interview Coach 是一个 **AI Agent Skill**，将面试录音自动转化为结构化复盘文档。它通过 Whisper 词级时间戳精确定位每个问答转折点，按内容边界切分音频，最终生成带内嵌音频播放器的交互式复盘文档——每段音频与对应的问答内容完全对应。
-
-**本分支** (`windows`) 使用 `faster-whisper` (CTranslate2) 替代 `mlx-whisper`，支持 Windows / Linux / macOS 全平台，且支持 NVIDIA GPU 加速。
-
-**macOS Apple Silicon 用户**：建议使用 `main` 分支（mlx-whisper 原生加速）。
+```bash
+git clone https://github.com/vanbuster/interview-coach.git
+cd interview-coach
+# macOS / Linux: bash setup.sh
+# Windows:       powershell -ExecutionPolicy Bypass -File setup.ps1
+```
 
 ## 快速开始
 
