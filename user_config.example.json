@@ -3,6 +3,8 @@
   "output_channel": "html",
   "language": "zh",
   "model": "medium",
+  "device": "auto",
+  "compute_type": "auto",
   "run_count": 0,
   "first_run": "",
   "last_run": ""

@@ -17,7 +17,7 @@ when_to_use: |
 
 ```
 录音 → [本地转写] → 完整文本+时间戳 → [LLM 识别问答边界] → 按边界切音频
-  → 生成复盘内容 → 创建飞书文档 → 嵌入音频片段 → 设置权限 → 交付 URL
+  → 生成复盘内容 → 创建飞书文档 或 HTML → 嵌入音频片段 → 交付
 ```
 
 **核心原则**：先完整转写，再从文本中识别问答边界，最后按边界切音频。禁止先切音频再转写。
@@ -33,7 +33,9 @@ when_to_use: |
 - `python3 scripts/split_audio.py --help` — 切分
 - `ffmpeg -version` — 音频处理
 
-如缺少依赖，运行 `bash setup.sh` 一键安装（ffmpeg + Python 依赖 + Whisper 模型预下载）。
+如缺少依赖，运行安装脚本：
+- macOS / Linux：`bash setup.sh`
+- Windows：`powershell -ExecutionPolicy Bypass -File setup.ps1`
 
 **偏好加载（Reflection 机制）**：
 
@@ -43,7 +45,7 @@ when_to_use: |
 cat user_config.json 2>/dev/null
 ```
 
-- **如果存在** → 加载已保存偏好（`output_channel` / `model` / `language`），后续 Phase 跳过对应询问
+- **如果存在** → 加载已保存偏好（`output_channel` / `model` / `language` / `device` / `compute_type`），后续 Phase 跳过对应询问
 - **如果不存在** → 标记为首次运行，后续流程中会询问偏好并保存
 
 配置文件格式：
@@ -53,6 +55,8 @@ cat user_config.json 2>/dev/null
   "output_channel": "html",
   "language": "zh",
   "model": "medium",
+  "device": "auto",
+  "compute_type": "auto",
   "run_count": 3,
   "first_run": "2026-06-01",
   "last_run": "2026-06-06"
@@ -72,7 +76,7 @@ cat user_config.json 2>/dev/null
 **核心改进**：用户只需提供素材文件夹路径，Agent 自动扫描识别所有素材。
 
 1. **接受输入**：
-   - 文件夹路径（如 `/path/to/智科谷/`）
+   - 文件夹路径（如 `/path/to/智科谷/` 或 `C:\Users\...\智科谷\`）
    - 或逐个文件路径（向后兼容）
 
 2. **自动扫描文件夹**（如果提供了文件夹路径）：
@@ -109,14 +113,23 @@ cat user_config.json 2>/dev/null
 ### Phase 2：音频转写（本地执行，零 Token 消耗）
 
 ```bash
-# 使用已保存的模型偏好（或默认 medium）
+# 自动选择最佳引擎（macOS→mlx-whisper Metal，其余→faster-whisper）
 python3 scripts/transcribe.py output.mp3
+
+# NVIDIA GPU 加速（速度提升 3-5x）
+python3 scripts/transcribe.py output.mp3 --device cuda --compute-type float16
 
 # 速度优先：large-v3-turbo
 python3 scripts/transcribe.py output.mp3 --model large-v3-turbo
+
+# 强制使用 faster-whisper
+python3 scripts/transcribe.py output.mp3 --engine faster-whisper
+
+# macOS 可选：SenseVoice（无词级时间戳）
+python3 scripts/transcribe.py output.mp3 --engine sensevoice
 ```
 
-**为什么用 Whisper**：Whisper 的 `word_timestamps=True` 提供每个词的精确起止时间（~20ms），使 Phase 3 能在转写文本中精确定位问答边界。
+**引擎选择**：`--engine auto`（默认）自动检测最佳引擎。macOS 优先 mlx-whisper（Metal 加速），其余平台用 faster-whisper（CTranslate2，CPU + NVIDIA CUDA）。所有 Whisper 引擎提供词级时间戳（~20ms 精度）。
 
 **输出**（与录音同目录）：
 - `transcript_full.json` — 完整 JSON（segments 内含 word-level timestamps）
@@ -147,7 +160,6 @@ python3 scripts/transcribe.py output.mp3 --model large-v3-turbo
    text_all = ''.join(w['word'] for w in words)
    pos = text_all.find(query)
    if pos >= 0:
-       # 找到对应词的索引
        char_count = 0
        for w in words:
            char_count += len(w['word'])
@@ -317,6 +329,8 @@ lark-cli drive permission.public patch \
      "output_channel": "<本次使用的输出渠道>",
      "language": "<本次使用的语言>",
      "model": "<本次使用的模型>",
+     "device": "<本次使用的设备>",
+     "compute_type": "<本次使用的精度>",
      "run_count": <累计次数 +1>,
      "first_run": "<首次运行日期，不变>",
      "last_run": "<当前日期>"
@@ -347,12 +361,14 @@ lark-cli drive permission.public patch \
 
 | 工具 | 必需 | 用途 | 安装 |
 |------|------|------|------|
-| ffmpeg | ✅ | 音频转码/切分 | `brew install ffmpeg` |
-| Python 3.10+ | ✅ | 转写脚本 | 系统预装 |
-| mlx-whisper | ✅ | Whisper 引擎（默认） | `pip install mlx-whisper` |
-| mlx-audio | ❌ 备选 | SenseVoice 引擎 | `pip install mlx-audio` |
+| ffmpeg | ✅ | 音频转码/切分 | `brew install ffmpeg` / `apt install ffmpeg` |
+| Python 3.10+ | ✅ | 转写脚本 | 系统包管理器 |
+| faster-whisper | ✅ | Whisper 引擎 (CTranslate2，全平台) | `pip install faster-whisper` |
+| mlx-whisper | ❌ macOS | Metal 加速 Whisper | `pip install mlx-whisper` |
+| mlx-audio | ❌ macOS | SenseVoice 引擎（备选） | `pip install mlx-audio` |
 | lark-cli | ❌ 可选 | 飞书文档输出 | `npm install -g lark-cli` |
 
-> 一键安装：`bash setup.sh`（自动安装 ffmpeg + Python 依赖 + 预下载 Whisper 模型）
-> Whisper 为默认引擎：提供词级时间戳（~20ms 精度），使问答边界定位精确到秒。SenseVoice 无内部时间戳，仅作备选。
+> 一键安装：`bash setup.sh`（macOS/Linux）或 `powershell -ExecutionPolicy Bypass -File setup.ps1`（Windows）
+> 引擎自动选择：macOS 用 mlx-whisper (Metal)，其余平台用 faster-whisper (CTranslate2)
+> GPU 加速：NVIDIA GPU 使用 `--device cuda --compute-type float16`
 > Reflection 机制：首次运行建立偏好，后续只需提供素材文件夹路径即可自动执行全流程。
