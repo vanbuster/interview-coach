@@ -1,5 +1,5 @@
 ---
-name: interview-review-coach
+name: interview-coach
 description: AI Agent PM 面试复盘教练——从录音/笔记/JD 出发，生成结构化复盘文档，逐题提供更优解
 when_to_use: |
   - 用户说"面试复盘"、"面试回顾"、"复盘这次面试"
