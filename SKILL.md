@@ -45,7 +45,7 @@ when_to_use: |
 cat user_config.json 2>/dev/null
 ```
 
-- **如果存在** → 加载已保存偏好（`output_channel` / `model` / `language` / `device` / `compute_type`），后续 Phase 跳过对应询问
+- **如果存在** → 加载已保存偏好（`output_channel` / `model` / `language` / `device` / `compute_type` / `feishu_folder_token` / `local_archive_dir`），后续 Phase 跳过对应询问
 - **如果不存在** → 标记为首次运行，后续流程中会询问偏好并保存
 
 配置文件格式：
@@ -57,6 +57,8 @@ cat user_config.json 2>/dev/null
   "model": "medium",
   "device": "auto",
   "compute_type": "auto",
+  "feishu_folder_token": "",
+  "local_archive_dir": "",
   "run_count": 3,
   "first_run": "2026-06-01",
   "last_run": "2026-06-06"
@@ -95,9 +97,14 @@ cat user_config.json 2>/dev/null
      - 恰好 1 个 → 自动选择，无需询问
      - 多个 → 用 `AskUserQuestion` 让用户选
      - 0 个 → 提示用户提供录音文件路径
-   - **JD 图片**（可选）：
-     - 找到 → 用 `analyze_image` MCP 工具提取
-     - 没找到 → 不阻塞，可后续让用户提供
+   - **JD（可选，但建议补充——复盘质量的关键输入）**：扫描 `*.{png,jpg,jpeg}` 图片。
+     - 找到图片 → 用 `analyze_image` MCP 工具提取
+     - **没找到 → 主动用 `AskUserQuestion` 询问用户是否补充 JD，不要静默跳过**。选项：
+       - 本地图片路径 → `analyze_image` 提取
+       - 文字粘贴 → 直接作为 JD 文本
+       - 飞书/网页链接 → fetch 抓取正文
+       - 跳过 → 文档中标注「本次复盘缺少 JD 依据」
+     - JD 文本用于「公司 & 岗位画像」与逐题「更优解」，是评估回答优劣的基准
    - **面试笔记**（可选）：
      - PDF → 用 PyPDF2 提取文本
      - TXT/MD → 直接读取
@@ -239,19 +246,27 @@ python3 scripts/split_audio.py output.mp3 --boundaries boundaries.json --output 
 
 #### 5.3a 飞书通道（需 lark-cli）
 
+**归档文件夹解析**（避免文档散落云盘根目录）：
+
+- 从 `user_config.json` 读 `feishu_folder_token`
+- **为空** → 用 `AskUserQuestion` 让用户提供归档文件夹（接受**飞书文件夹分享链接**或 `folder_token`），写入配置复用
+- 解析得到 token 后，后续 `docs +create` 一律带 `--folder-token`，文档直接落在该文件夹下
+
 **创建飞书文档**
 
 ```bash
 cd "<录音文件所在目录>"  # lark-cli @file 只接受相对路径
+FEISHU_FOLDER_TOKEN="<从 user_config.json 读取>"
 
 lark-cli docs +create \
   --title "{公司名} · {岗位名} 面试复盘" \
   --content @复盘文档.md \
   --doc-format markdown \
-  --api-version v2
+  --api-version v2 \
+  --folder-token "$FEISHU_FOLDER_TOKEN"
 ```
 
-记录返回的 `document_id` 和 `url`。
+记录返回的 `document_id` 和 `url`。文档将创建在归档文件夹下（而非云盘根目录）。
 
 > 如果遇到代理警告，加 `LARK_CLI_NO_PROXY=1` 前缀。
 
@@ -317,6 +332,26 @@ lark-cli drive permission.public patch \
 
 ---
 
+#### 5.4 产物本地归档（飞书 / HTML 通道通用）
+
+复盘交付后，把工作目录的产物归档到固定位置，避免散落临时目录：
+
+1. 从 `user_config.json` 读 `local_archive_dir`（本地产物归档根目录）
+2. **为空** → 用 `AskUserQuestion` 询问归档目录（可跳过；跳过则保留在原工作目录）
+3. 建子目录 `<local_archive_dir>/<公司名>_<岗位>_<日期>/`，移入：
+   - `segments/`（切片音频）、`复盘文档.md` / `复盘文档.html`
+   - `transcript_full.json` / `transcript_timestamped.txt` / `transcript_timeline.txt` / `transcript_words.json`
+   - `boundaries.json`、`<录音>.mp3`
+4. **不打包 zip**，直接 `mv` 整理成独立子目录即可
+
+```bash
+ARCHIVE="$LOCAL_ARCHIVE_DIR/<公司名>_<岗位>_<日期>"
+mkdir -p "$ARCHIVE"
+mv segments 复盘文档.md transcript_* boundaries.json "<录音>.mp3" "$ARCHIVE/"
+```
+
+---
+
 ### Phase 6：保存偏好（Reflection 沉淀）
 
 在交付完成后，保存/更新 `user_config.json`：
@@ -331,6 +366,8 @@ lark-cli drive permission.public patch \
      "model": "<本次使用的模型>",
      "device": "<本次使用的设备>",
      "compute_type": "<本次使用的精度>",
+     "feishu_folder_token": "<用户提供的飞书归档文件夹 token，首次询问后复用>",
+     "local_archive_dir": "<本地产物归档根目录，首次询问后复用>",
      "run_count": <累计次数 +1>,
      "first_run": "<首次运行日期，不变>",
      "last_run": "<当前日期>"
@@ -356,6 +393,9 @@ lark-cli drive permission.public patch \
 - 所有输出文件整理到专用目录
 - lark-cli 的 `@file` 参数必须用相对路径，先 cd 到目标目录再执行
 - 飞书文档创建使用 `--api-version v2`，内容格式用 `--doc-format markdown`
+- **禁止**把飞书文档创建在云盘根目录。必须用 `--folder-token` 归档到 `feishu_folder_token` 指定的文件夹；token 缺失时先询问用户再创建
+- **禁止**让产物（segments / 转写 / 复盘 / 录音）散落工作目录。流程末尾必须移入 `local_archive_dir/<公司_岗位_日期>/` 子目录
+- 扫描不到 JD 时**禁止静默跳过**，必须用 `AskUserQuestion` 主动询问用户是否补充
 
 ## 依赖
 
