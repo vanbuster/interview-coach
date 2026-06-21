@@ -45,7 +45,7 @@ when_to_use: |
 cat user_config.json 2>/dev/null
 ```
 
-- **如果存在** → 加载已保存偏好（`output_channel` / `model` / `language` / `device` / `compute_type` / `feishu_folder_token` / `local_archive_dir`），后续 Phase 跳过对应询问
+- **如果存在** → 加载已保存偏好（`output_channel` / `model` / `language` / `device` / `compute_type` / `feishu_folder_token` / `local_archive_dir` / `ammo_doc_id`），后续 Phase 跳过对应询问
 - **如果不存在** → 标记为首次运行，后续流程中会询问偏好并保存
 
 配置文件格式：
@@ -59,6 +59,7 @@ cat user_config.json 2>/dev/null
   "compute_type": "auto",
   "feishu_folder_token": "",
   "local_archive_dir": "",
+  "ammo_doc_id": "",
   "run_count": 3,
   "first_run": "2026-06-01",
   "last_run": "2026-06-06"
@@ -368,6 +369,7 @@ mv segments 复盘文档.md transcript_* boundaries.json "<录音>.mp3" "$ARCHIV
      "compute_type": "<本次使用的精度>",
      "feishu_folder_token": "<用户提供的飞书归档文件夹 token，首次询问后复用>",
      "local_archive_dir": "<本地产物归档根目录，首次询问后复用>",
+     "ammo_doc_id": "<面试弹药库飞书文档 token，首次建库后复用；为空则跳过 Phase 7>",
      "run_count": <累计次数 +1>,
      "first_run": "<首次运行日期，不变>",
      "last_run": "<当前日期>"
@@ -379,6 +381,45 @@ mv segments 复盘文档.md transcript_* boundaries.json "<录音>.mp3" "$ARCHIV
 - 每次运行完成后**必须保存**（即使用户未更改偏好，也更新 `last_run` 和 `run_count`）
 - 只保存偏好字段，不保存面试内容
 - 用户主动说"切换输出渠道"时，也更新此文件
+
+---
+
+### Phase 7：弹药库同步（可选，持续沉淀）
+
+> 把本次复盘的亮点反哺到「面试弹药库」，让话术库随实战持续进化。弹药库是**派生视图**（源 = 各次复盘 + Obsidian concept），本 Phase 做增量同步。
+
+**前置**：弹药库飞书文档 token 存于 `user_config.json` 的 `ammo_doc_id`。
+- **有值** → 进入同步流程
+- **为空** → 跳过本 Phase（首次需先建弹药库，或用 `lark-cli docs +search` 在归档文件夹搜「弹药库」文档补 token）
+
+**步骤**：
+
+1. **读取**：`docs +fetch` 弹药库文档（了解现有弹药 + 数据卡覆盖范围）+ 本次 `复盘文档.md` / `boundaries.json`
+2. **判断**（LLM）：本次面试是否有**可入弹药库的新内容**？分三类：
+   - **新数据**：新的量化指标/案例（如新公司的新数据）→ 追加到「量化数据弹药卡」
+   - **新话术/新案例**：某题答得特别好、或更优解里有可直接背诵的新黄金话术 → 追加到对应弹药
+   - **新问题类型**：现有弹药没覆盖的高频问题（新技术追问、新行为题）→ 建议新增弹药
+3. **无新内容** → 跳过，告知用户「本次无新弹药可入库」
+4. **有新内容** → 用 `AskUserQuestion` 逐条展示新增项，让用户勾选要入库的
+5. **入库**（用户确认后；`docs +update` **必须用 v1**——v2 有 `--command` bug）：
+   - 新数据 → `--mode insert_after --selection-by-title "量化数据弹药卡"` 追加
+   - 新话术 → `--mode insert_after --selection-by-title "弹药 0X｜..."` 定位对应弹药后追加
+   - 新问题类型 → `--mode insert_before --selection-by-title "量化数据弹药卡"` 插入完整新弹药（问题/框架/素材/黄金话术）
+
+```bash
+# v1 模式（v2 有 bug）；insert 用 stdin 传内容，定位用 selection-by-title
+LARK_CLI_NO_PROXY=1 lark-cli docs +update --doc "$AMMO_DOC_ID" \
+  --mode insert_after --selection-by-title "弹药 02｜项目深挖" --markdown - << 'EOF'
+**新增实战素材**（来源：XX 面试 2026-XX-XX）：...
+EOF
+```
+
+6. **记录**：在文档末尾 append 一条「弹药更新日志」（日期 + 来源面试 + 入库项摘要），保证可追溯
+
+**原则**：
+- **只动素材层，不碰框架层**（除非用户明确确认新增弹药类型）
+- 每次入库前**必须询问用户**（禁止自动写入），展示具体内容让用户把关
+- 弹药库文档须分两区：框架区（稳定）/ 素材·数据卡·更新日志区（持续追加）
 
 ---
 
@@ -396,6 +437,7 @@ mv segments 复盘文档.md transcript_* boundaries.json "<录音>.mp3" "$ARCHIV
 - **禁止**把飞书文档创建在云盘根目录。必须用 `--folder-token` 归档到 `feishu_folder_token` 指定的文件夹；token 缺失时先询问用户再创建
 - **禁止**让产物（segments / 转写 / 复盘 / 录音）散落工作目录。流程末尾必须移入 `local_archive_dir/<公司_岗位_日期>/` 子目录
 - 扫描不到 JD 时**禁止静默跳过**，必须用 `AskUserQuestion` 主动询问用户是否补充
+- **禁止**自动写入弹药库。Phase 7 检测到新弹药必须先 `AskUserQuestion` 让用户确认，且只追加素材层不动框架层；`docs +update` 用 v1（v2 有 `--command` bug）
 
 ## 依赖
 

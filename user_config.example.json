@@ -7,6 +7,7 @@
   "compute_type": "auto",
   "feishu_folder_token": "",
   "local_archive_dir": "",
+  "ammo_doc_id": "",
   "run_count": 0,
   "first_run": "",
   "last_run": ""
