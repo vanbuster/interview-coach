@@ -251,7 +251,7 @@ python3 scripts/split_audio.py output.mp3 --boundaries boundaries.json --output 
 
 - 从 `user_config.json` 读 `feishu_folder_token`
 - **为空** → 用 `AskUserQuestion` 让用户提供归档文件夹（接受**飞书文件夹分享链接**或 `folder_token`），写入配置复用
-- 解析得到 token 后，后续 `docs +create` 一律带 `--folder-token`，文档直接落在该文件夹下
+- 解析得到 token 后，`docs +create` 带 `--folder-token` 指定目标文件夹；**但该参数偶发不生效（文档可能落根目录），因此创建后必须用 `drive +move` 显式归位兜底**
 
 **创建飞书文档**
 
@@ -259,15 +259,19 @@ python3 scripts/split_audio.py output.mp3 --boundaries boundaries.json --output 
 cd "<录音文件所在目录>"  # lark-cli @file 只接受相对路径
 FEISHU_FOLDER_TOKEN="<从 user_config.json 读取>"
 
-lark-cli docs +create \
+# 1. 创建文档（--folder-token 指定目标，但偶发不生效）
+DOC_ID=$(lark-cli docs +create \
   --title "{公司名} · {岗位名} 面试复盘" \
   --content @复盘文档.md \
   --doc-format markdown \
   --api-version v2 \
-  --folder-token "$FEISHU_FOLDER_TOKEN"
+  --folder-token "$FEISHU_FOLDER_TOKEN" | jq -r '.data.document.document_id')
+
+# 2. 兜底：显式 move 到归档文件夹（docs +create --folder-token 偶发不生效，文档会落根目录）
+lark-cli drive +move --file-token "$DOC_ID" --type docx --folder-token "$FEISHU_FOLDER_TOKEN"
 ```
 
-记录返回的 `document_id` 和 `url`。文档将创建在归档文件夹下（而非云盘根目录）。
+记录返回的 `document_id` 和 `url`。`drive +move` 保证文档归位到归档文件夹（即使 `--folder-token` 未生效也不会落根目录）。
 
 > 如果遇到代理警告，加 `LARK_CLI_NO_PROXY=1` 前缀。
 
@@ -434,7 +438,7 @@ EOF
 - 所有输出文件整理到专用目录
 - lark-cli 的 `@file` 参数必须用相对路径，先 cd 到目标目录再执行
 - 飞书文档创建使用 `--api-version v2`，内容格式用 `--doc-format markdown`
-- **禁止**把飞书文档创建在云盘根目录。必须用 `--folder-token` 归档到 `feishu_folder_token` 指定的文件夹；token 缺失时先询问用户再创建
+- **禁止**把飞书文档留在云盘根目录。`docs +create --folder-token` 偶发不生效，**创建后必须用 `drive +move` 显式归位**到 `feishu_folder_token` 指定的文件夹；token 缺失时先询问用户再创建
 - **禁止**让产物（segments / 转写 / 复盘 / 录音）散落工作目录。流程末尾必须移入 `local_archive_dir/<公司_岗位_日期>/` 子目录
 - 扫描不到 JD 时**禁止静默跳过**，必须用 `AskUserQuestion` 主动询问用户是否补充
 - **禁止**自动写入弹药库。Phase 7 检测到新弹药必须先 `AskUserQuestion` 让用户确认，且只追加素材层不动框架层；`docs +update` 用 v1（v2 有 `--command` bug）
